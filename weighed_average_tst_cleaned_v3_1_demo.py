@@ -19,7 +19,6 @@ import math
 import pandas
 import numpy
 from time import localtime, strftime
-from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from statsmodels import robust
 # from matplotlib.pyplot import plot, scatter, show, fill_between
 from numpy import NaN, Inf, arange, isscalar, asarray, array
@@ -148,15 +147,6 @@ greed_indicator = 30                 # Dont hang onto profitable trades too long
 SUPER_LOW_NEG_MARGIN = 100          # Dont trust IG to take care of ESMA margins
 var_high_low_limit_pips = 10  # See notes below
 ###########################################################################
-indices = "93262"  # live
-
-# indices = "xxxxx"  # demo, remember to change this if you change to demo
-# epic_ids = []  # not in use, yet!
-# market_sentiment = []
-
-net_change = [] #global, for ease...hacky af
-percent_change = [] #global, for ease...hacky af
-
 #remember to change these for DEMO!!!
 types = {
     # 'Cryptocurrency': ['', 'Europe/London']}
@@ -282,113 +272,78 @@ def exploreNode(nodeID):
                     market['epic'])]
 
             if any(dfb_today_daily_checks):
-                # if hacks_enabled:
-                    # if tradeable_epic(
-                        # "KA.D.GKP.DAILY.IP",
-                            # market['marketStatus']):  # KA.D.GKP.DAILY.IP or any epic_id you like really
-                        # print("trading.... " + str(market['epic']))
-                        # no_trade_window()
-                        # main_trade_function("KA.D.GKP.DAILY.IP")
-                # # else:
-                    # # print(
-                    # # "!!INFO!!...not DFB,TODAY,DAILY!!...." +
-                    # # str(
-                    # # market['epic']))
-
-                # else:
                 if tradeable_epic(market['epic'], market['marketStatus']):
                     print("trading.... " + str(market['epic']))
                     no_trade_window()
                     main_trade_function(market['epic'])
-                # else:
-                    # print(
-                    # "!!INFO!!...not DFB,TODAY,DAILY!!...." +
-                    # str(
-                    # market['epic']))
 
 
-def peakdet(v, delta, x=None):
+def supres(
+        low,
+        high,
+        min_touches=2,
+        stat_likeness_percent=1.5,
+        bounce_percent=5):
+    """Support and Resistance Testing
+
+    Identifies support and resistance levels of provided price action data.
+
+    Args:
+        low(pandas.Series): A pandas Series of lows from price action data.
+        high(pandas.Series): A pandas Series of highs from price action data.
+        min_touches(int): Minimum # of touches for established S&R.
+        stat_likeness_percent(int/float): Acceptable margin of error for level.
+        bounce_percent(int/float): Percent of price action for established bounce.
+
+    ** Note **
+        If you want to calculate support and resistance without regard for
+        candle shadows, pass close values for both low and high.
+
+    Returns:
+        sup(float): Established level of support or None (if no level)
+        res(float): Established level of resistance or None (if no level)
     """
-    Converted from MATLAB script at http://billauer.co.il/peakdet.html
+    # Setting default values for support and resistance to None
+    sup = None
+    res = None
 
-    Returns two arrays
+    # Identifying local high and local low
+    maxima = high.max()
+    minima = low.min()
 
-    function [maxtab, mintab]=peakdet(v, delta, x)
-    %PEAKDET Detect peaks in a vector
-    %        [MAXTAB, MINTAB] = PEAKDET(V, DELTA) finds the local
-    %        maxima and minima ("peaks") in the vector V.
-    %        MAXTAB and MINTAB consists of two columns. Column 1
-    %        contains indices in V, and column 2 the found values.
-    %
-    %        With [MAXTAB, MINTAB] = PEAKDET(V, DELTA, X) the indices
-    %        in MAXTAB and MINTAB are replaced with the corresponding
-    %        X-values.
-    %
-    %        A point is considered a maximum peak if it has the maximal
-    %        value, and was preceded (to the left) by a value lower by
-    %        DELTA.
+    # Calculating distance between max and min (total price movement)
+    move_range = maxima - minima
 
-    % Eli Billauer, 3.4.05 (Explicitly not copyrighted).
-    % This function is released to the public domain; Any use is allowed.
+    # Calculating bounce distance and allowable margin of error for likeness
+    move_allowance = move_range * (stat_likeness_percent / 100)
+    bounce_distance = move_range * (bounce_percent / 100)
 
-    """
-    maxtab = []
-    mintab = []
+    # Test resistance by iterating through data to check for touches delimited
+    # by bounces
+    touchdown = 0
+    awaiting_bounce = False
+    for x in range(0, len(high)):
+        if abs(maxima - high[x]) < move_allowance and not awaiting_bounce:
+            touchdown = touchdown + 1
+            awaiting_bounce = True
+        elif abs(maxima - high[x]) > bounce_distance:
+            awaiting_bounce = False
+    if touchdown >= min_touches:
+        res = maxima
 
-    if x is None:
-        x = arange(len(v))
-
-    v = asarray(v)
-
-    if len(v) != len(x):
-        sys.exit('Input vectors v and x must have same length')
-
-    if not isscalar(delta):
-        sys.exit('Input argument delta must be a scalar')
-
-    if delta <= 0:
-        sys.exit('Input argument delta must be positive')
-
-    mn, mx = Inf, -Inf
-    mnpos, mxpos = NaN, NaN
-
-    lookformax = True
-
-    for i in arange(len(v)):
-        this = v[i]
-        if this > mx:
-            mx = this
-            mxpos = x[i]
-        if this < mn:
-            mn = this
-            mnpos = x[i]
-
-        if lookformax:
-            if this < mx - delta:
-                maxtab.append((mxpos, mx))
-                mn = this
-                mnpos = x[i]
-                lookformax = False
-        else:
-            if this > mn + delta:
-                mintab.append((mnpos, mn))
-                mx = this
-                mxpos = x[i]
-                lookformax = True
-
-    return array(maxtab), array(mintab)
-
-
-def weighted_avg_and_std(values, weights):
-    """
-    Return the weighted average and standard deviation.
-
-    values, weights -- Numpy ndarrays with the same shape.
-    """
-    average = numpy.average(values, weights=weights)
-    variance = numpy.average((values - average)**2, weights=weights)
-    return (average, math.sqrt(variance))
-
+    # Test support by iterating through data to check for touches delimited by
+    # bounces
+    touchdown = 0
+    awaiting_bounce = False
+    for x in range(0, len(low)):
+        if abs(low[x] - minima) < move_allowance and not awaiting_bounce:
+            touchdown = touchdown + 1
+            awaiting_bounce = True
+        elif abs(low[x] - minima) > bounce_distance:
+            awaiting_bounce = False
+    if touchdown >= min_touches:
+        sup = minima
+    return sup, res
 
 def midpoint(p1, p2):
     return (p1 + p2) / 2     # or *0.5
@@ -606,7 +561,6 @@ def main_trade_function(epic_id):
     print(positionMap)
 
     try:
-
         # obligatory sleep, gets round IG 60 per min limit
         time.sleep(2)
 
@@ -630,11 +584,7 @@ def main_trade_function(epic_id):
         ######################################
         instrument_name = str(d['instrument']['name'])
 
-        ###############got current prices and calculated midpoint for accuracy#
-        ###############got current prices and calculated midpoint for accuracy#
-        ###############got current prices and calculated midpoint for accuracy#
-
-        base_url = REAL_OR_NO_REAL + "/prices/" + epic_id + "/MINUTE_10/24"
+        base_url = REAL_OR_NO_REAL + "/prices/" + epic_id + "/MINUTE/60"
         # Price resolution (MINUTE, MINUTE_2, MINUTE_3, MINUTE_5,
         # MINUTE_10, MINUTE_15, MINUTE_30, HOUR, HOUR_2, HOUR_3,
         # HOUR_4, DAY, WEEK, MONTH)
@@ -652,203 +602,77 @@ def main_trade_function(epic_id):
         remaining_allowance = d['allowance']['remainingAllowance']
         reset_time = humanize_time(
             int(d['allowance']['allowanceExpiry']))
-        debug_info("Remaining API Calls left: " + str(remaining_allowance))
-        debug_info("Time to API Key reset: " + str(reset_time))
+        # debug_info("Remaining API Calls left: " + str(remaining_allowance))
+        # debug_info("Time to API Key reset: " + str(reset_time))
 
         high_prices = []
         low_prices = []
-        close_prices = []
-        ltv = []
+        snap_tm = []
 
         for i in d['prices']:
 
             if i['highPrice']['bid'] is not None:
                 highPrice = i['highPrice']['bid']
-                # print (highPrice) #debug
                 high_prices.append(highPrice)
             ########################################
             if i['lowPrice']['bid'] is not None:
                 lowPrice = i['lowPrice']['bid']
-                # print (lowPrice) #debug
                 low_prices.append(lowPrice)
             ########################################
-            if i['closePrice']['bid'] is not None:
-                close_price = i['closePrice']['bid']
-                # print (close_price) #debug
-                close_prices.append(close_price)
-            ########################################
-            if isinstance(i['lastTradedVolume'], int):
-                ltvol = int(i['lastTradedVolume'])
-                # print (ltvol) #debug
-                ltv.append(ltvol)
-
-        # debug
-        # print ("len of high_prices..." + str(len(high_prices)))
-        # print ("len of low_prices..." + str(len(low_prices)))
-        # print ("len of close_prices..." + str(len(close_prices)))
-        # print ("len of ltv..." + str(len(ltv)))
+            snap_time = str(i['snapshotTime'])
+            match = re.search(r'\d{4}:\d{2}:\d{2}', snap_time)
+            date = datetime.datetime.strptime(
+                match.group(), '%Y:%m:%d').date()
+            snap_tm.append(str(date))
 
         array_len_check = []
         array_len_check.append(len(high_prices))
         array_len_check.append(len(low_prices))
-        array_len_check.append(len(close_prices))
-        array_len_check.append(len(ltv))
-        # debug
-        # print (array_len_check)
-        # silently drop out
+        xa = range(0, len(low_prices))
         if all_same(array_len_check) == False:
             print("Fuck this! Incomplete dataset from IG")
             return None
 
-        ATR = calculate_stop_loss(d)
+        sup, res = supres(pandas.Series(low_prices),
+                          pandas.Series(high_prices))
 
-        ###############################################################
-        ###############################################################
-        ###############################################################
+        if any(elem is None for elem in [sup,res]):
+            debug_info("no sup/res value")
+            return None
 
-        low_prices = numpy.ma.asarray(low_prices)
-        high_prices = numpy.ma.asarray(high_prices)
-        ltv = numpy.ma.asarray(ltv)
+        # Graph stuff, leave
+        # print(sup)
+        # print(res)
+        # if sup is not None:
+            # sup_a = numpy.empty(len(xa))
+            # sup_a.fill(sup)
+            # plot(xa, sup_a, label='Support')
+        # if res is not None:
+            # res_a = numpy.empty(len(xa))
+            # res_a.fill(res)
+            # plot(xa, res_a, label='Resistance')
+        
+        # plot(xa, high_prices, label='High Prices')
+        # plot(xa, low_prices, label='Low Prices')
+        # xticks(xa, snap_tm, rotation='vertical')
+        # tight_layout()
+        # rcParams.update({'figure.autolayout': True})
+        # rcParams.update({'font.size': 8})
+        # ylabel('Price')
+        # legend(loc='best')
+        # legend()
+        # grid(True)
+        # title("Daily Analysis for " + str(instrument_name))
+        # draw()
+        # build_file_name = str(uuid.uuid4().hex)
+        # savefig(str(build_file_name) + ".jpg", dpi=100)
+        # # show()
+        # clf()
 
-        # weighted_avg_and_std(values, weights)
-        low_weighted_avg, low_weighted_std_dev = weighted_avg_and_std(
-            low_prices, ltv)
-        high_weighted_avg, high_weighted_std_dev = weighted_avg_and_std(
-            high_prices, ltv)
-
-        # debug_info("instrument_name: " + str(instrument_name))
-        # debug_info("high_weighted_avg: " + str(high_weighted_avg))
-        # debug_info("low_weighted_avg: " + str(low_weighted_avg))
-        # debug_info("current_mid: " + str(current_mid))
-
-        # debug_info("low_weighted_std_dev: " + str(low_weighted_std_dev))
-        # debug_info("high_weighted_std_dev: " + str(high_weighted_std_dev))
-
-        # The VWAP can be used similar to moving averages, where prices above
-        # the VWAP reflect a bullish sentiment and prices below the VWAP
-        # reflect a bearish sentiment. Traders may initiate short positions as
-        # a stock price moves below VWAP for a given time period or initiate
-        # long position as the price moves above VWAP
-
-        ###############################################################
-        ###############################################################
-        ###############################################################
-
-        tmp_high_weight_var = float(high_weighted_avg + high_weighted_std_dev)
-        tmp_low_weight_var = float(low_weighted_avg + low_weighted_std_dev)
-        # e.g
-        # series = [0,0,0,2,0,0,0,-2,0,0,0,2,0,0,0,-2,0]
-
-        maxtab_high, _mintab_high = peakdet(high_prices, .3)
-        _maxtab_low, mintab_low = peakdet(low_prices, .3)
-
-        # print(array(maxtab_high)[:, 1])
-        # print(array(mintab_low)[:, 1])
-        # convert to array so can work on min/max
-
-        mintab_low_a = array(mintab_low)[:, 1]
-        maxtab_high_a = array(maxtab_high)[:, 1]
-
-        print(mintab_low_a)
-        print(maxtab_high_a)
-
-        xb = range(0, len(mintab_low_a))
-        xc = range(0, len(maxtab_high_a))
-
-        mintab_low_a_slope, mintab_low_a_intercept, mintab_low_a_lo_slope, mintab_low_a_hi_slope = stats.mstats.theilslopes(
-            mintab_low_a, xb, 0.99)
-        maxtab_high_a_slope, maxtab_high_a_intercept, maxtab_high_a_lo_slope, maxtab_high_a_hi_slope = stats.mstats.theilslopes(
-            maxtab_high_a, xc, 0.99)
-
-        peak_count_high = 0
-        peak_count_low = 0
-        # how may "peaks" are BELOW the threshold
-        for a in mintab_low_a:
-            if float(a) < float(tmp_low_weight_var):
-                peak_count_low += 1
-
-        # how may "peaks" are ABOVE the threshold
-        for a in maxtab_high_a:
-            if float(a) > float(tmp_high_weight_var):
-                peak_count_high += 1
-
-        print("peak_count_low..." + str(peak_count_low))
-        print("peak_count_high..." + str(peak_count_high))
-
-        print("mintab_low_a_slope..." + str(mintab_low_a_slope))
-        # print("mintab_low_a_intercept..." + str(mintab_low_a_intercept))
-        # print("mintab_low_a_lo_slope..." + str(mintab_low_a_lo_slope))
-        # print("mintab_low_a_hi_slope..." + str(mintab_low_a_hi_slope))
-
-        print("maxtab_high_a_slope..." + str(maxtab_high_a_slope))
-        # print("maxtab_high_a_intercept..." + str(maxtab_high_a_intercept))
-        # print("maxtab_high_a_lo_slope..." + str(maxtab_high_a_lo_slope))
-        # print("maxtab_high_a_hi_slope..." + str(maxtab_high_a_hi_slope))
-
-        additional_checks_buy = [
-            int(peak_count_low) > int(peak_count_high),
-            float(mintab_low_a_slope) < float(maxtab_high_a_slope),
-            float(current_mid) >= float(
-                numpy.min(mintab_low_a))]
-        additional_checks_sell = [
-            int(peak_count_high) > int(peak_count_low),
-            float(maxtab_high_a_slope) > float(mintab_low_a_slope),
-            float(current_mid) <= float(
-                numpy.max(maxtab_high_a))]
-
-        if all(additional_checks_sell):
-            debug_info("!!SELL SIGNAL!!!")
-        elif all(additional_checks_buy):
-            debug_info("!!BUY SIGNAL!!!")
-        else:
-            debug_info("!!!NEUTRAL SIGNAL!!!")
-
-        buy_rules = [
-            float(current_mid) > float(
-                numpy.max(maxtab_high_a)), all(additional_checks_buy)]
-        ###############################################################
-        sell_rules = [
-            float(current_mid) < float(
-                numpy.min(mintab_low_a)), all(additional_checks_sell)]
-
-        # # alt
-        # # if there is a change of direction > peak in both directions
-        # # change to use any(), as before .... if current is below average price "sell". If it's above then "buy" (there must be interest in that stock??)
-        # sell_rules = [
-        # float(current_mid) >= float(
-        # numpy.max(maxtab_high_a)),
-        # float(current_mid) <= float(tmp_low_weight_var)]
-        # ###############################################################
-        # buy_rules = [
-        # float(current_mid) <= float(
-        # numpy.min(mintab_low_a)),
-        # float(current_mid) >= float(tmp_high_weight_var)]
-
-        # # alt, overbought vs oversold
-        # ###############################################################
-        # # battle between buyers and sellers so as long as its not over the max
-        # # peak, i.e lower than < and above the high weight average, trend is
-        # # probably back down
-        # ###############################################################
-        # sell_rules = [
-        #     float(current_mid) <= float(
-        #         numpy.max(maxtab_high_a)),
-        #     float(current_mid) >= float(tmp_high_weight_var)]
-        # ###############################################################
-        # # battle between buyers and sellers so as long as its not below the min
-        # # peak, i.e lower than < (the sellers are winning) and below the low
-        # # weight average trend is probably up, as this is a bargin at this
-        # # price
-        # ###############################################################
-        # buy_rules = [
-        #     float(current_mid) >= float(
-        #         numpy.min(mintab_low_a)),
-        #     float(current_mid) <= float(tmp_low_weight_var)]
-
-        if any(buy_rules):
+        if float(current_bid) > float(res): #broken through resistance
             debug_info("!!BUY SIGNAL...." + str(instrument_name))
             trade_direction = "BUY"
-        elif any(sell_rules):
+        elif float(current_bid) < float(sup): #broken through support
             debug_info("!!SELL SIGNAL...." + str(instrument_name))
             trade_direction = "SELL"
         else:
